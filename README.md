@@ -27,12 +27,14 @@ This toolkit implements network isolation using:
 - Mullvad VPN installed on host (for DNS forwarding)
   - *Note: If using another VPN provider, edit the DNS forwarding sections accordingly*
 
-## Included Scripts
+## Included Scripts and Execution Order
+
+Execute the scripts in the following sequence:
 
 1. **create_vm_network_normal.sh** - Sets up isolated virtual networks
 2. **configure_host_ufw_normal.sh** - Configures UFW firewall rules for VM networks
 3. **create_debian_vm.sh** - Provisions VMs from templates with automatic configuration
-4. **delete_vm_and_cleanup.sh** - Removes VM networks and associated configurations
+4. **delete_vm_and_cleanup.sh** - (Optional) Removes VMs, networks, and associated configurations when no longer needed
 
 ## Ideal For
 
