@@ -52,36 +52,6 @@ sudo ./create_debian_vm.sh myvm 4096 2 20 linked
 sudo ./delete_vm_and_cleanup.sh --vm myvm
 ```
 
-## Script Details
-
-### 1. `create_vm_network_normal.sh`
-- Auto-detects next available bridge and subnet
-- Configures NAT forwarding with port range 1024-65535
-- Enables network autostart and validates DNS functionality
-- **Usage**: `sudo ./create_vm_network_normal.sh --name <network_name>`
-
-### 2. `configure_host_ufw_normal.sh`  
-- Detects physical and VPN interfaces automatically
-- Creates precise UFW rules for VM subnet traffic
-- Supports both Mullvad VPN and direct internet routing
-- Disables IPv6 for enhanced security
-- **Usage**: `sudo ./configure_host_ufw_normal.sh --network <network_name>`
-
-### 3. `create_debian_vm.sh`
-- Creates linked clones or full copies from templates
-- Handles both LVM and standard partition expansion
-- Generates unique hostnames and regenerates SSH keys
-- Configures network interfaces with private MAC addresses
-- **Usage**: `sudo ./create_debian_vm.sh <name> <ram_MB> <vcpus> <disk_GB> [linked|full]`
-- **Note**: Edit `TEMPLATE_IMAGE`, `NETWORK`, and `--os-variant` variables before use
-
-### 4. `delete_vm_and_cleanup.sh`
-- Safely removes VMs with snapshot handling
-- Cleans up dedicated networks and UFW rules  
-- Removes DHCP leases and validates complete cleanup
-- Preserves base images for linked clones
-- **Usage**: `sudo ./delete_vm_and_cleanup.sh --vm <vm_name>`
-
 ## Ideal For
 
 - **Development Environments**: Consistent, isolated VM setups
