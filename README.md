@@ -49,6 +49,7 @@ sudo ./create_debian_vm.sh myvm 4096 2 20 linked
 
 4. (Optional) Remove VM, network, and associated configurations when no longer needed
 sudo ./delete_vm_and_cleanup.sh --vm myvm
+```
 
 ## Ideal For
 
