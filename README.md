@@ -2,7 +2,7 @@
 
 A production-ready collection of shell scripts for automated creation, configuration, and management of Debian virtual machines on KVM/QEMU hosts with network isolation.
 
-## Key Features
+## Features
 
 - **Automated Network Creation**: Dynamically finds available subnets and bridge interfaces
 - **Smart VM Provisioning**: Supports both linked clones and full copies with automatic disk expansion
@@ -15,7 +15,7 @@ A production-ready collection of shell scripts for automated creation, configura
 
 ### Network Isolation
 - **Dynamic Bridge Assignment**: Automatically finds next available bridge (virbr0, virbr1, virbr2...)
-- **Subnet Auto-Discovery**: Scans existing networks to assign unique subnets (192.168.100.0/24+)
+- **Subnet Auto-Discovery**: Scans existing networks to assign unique subnets
 - **Dual Internet Access**: VPN-preferred routing with automatic direct internet fallback
 - **DNS Forwarding**: Built-in DNS resolution validation
 
@@ -38,19 +38,17 @@ A production-ready collection of shell scripts for automated creation, configura
 ```
 
 ### Usage Workflow
-```bash
-# 1. Create isolated network
+1. Set up isolated virtual network
 sudo ./create_vm_network_normal.sh --name myvm-net
 
-# 2. Configure firewall rules
+2. Configure UFW firewall rules for VM network
 sudo ./configure_host_ufw_normal.sh --network myvm-net
 
-# 3. Create VM (edit script variables first)
+3. Create VM from template (edit script variables first)
 sudo ./create_debian_vm.sh myvm 4096 2 20 linked
 
-# 4. Clean up when done (optional)
+4. (Optional) Remove VM, network, and associated configurations when no longer needed
 sudo ./delete_vm_and_cleanup.sh --vm myvm
-```
 
 ## Ideal For
 
