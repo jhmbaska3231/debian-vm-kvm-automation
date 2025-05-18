@@ -2,28 +2,14 @@
 
 A production-ready collection of shell scripts for automated creation, configuration, and management of Debian virtual machines on KVM/QEMU hosts with network isolation.
 
-## Features
-
-- **Automated Network Creation**: Dynamically finds available subnets and bridge interfaces
-- **Smart VM Provisioning**: Supports both linked clones and full copies with automatic disk expansion
-- **Network Isolation**: Each VM gets its own dedicated network with unique subnet and firewall rules
+## Key Features
+- **Automated Network Creation**: Dynamically finds available bridges and assigns unique subnets
+- **Smart VM Provisioning**: Template-based creation with linked clones, full copies, and automatic disk expansion
+- **Complete Network Isolation**: Each VM gets dedicated network, subnet, and firewall rules
 - **First-Boot Automation**: Auto-configures hostname, SSH keys, machine-ID, and filesystem expansion
-- **VPN Integration**: Seamless routing through Mullvad VPN with direct internet fallback
+- **Dual Internet Access**: VPN-preferred routing with direct internet fallback
+- **Simple Hardening**: SSH key regeneration, disabled root login and password authentication
 - **Complete Cleanup**: Safe removal of VMs, networks, UFW rules, and DHCP leases
-
-## Architecture
-
-### Network Isolation
-- **Dynamic Bridge Assignment**: Automatically finds next available bridge (virbr0, virbr1, virbr2...)
-- **Subnet Auto-Discovery**: Scans existing networks to assign unique subnets
-- **Dual Internet Access**: VPN-preferred routing with automatic direct internet fallback
-- **DNS Forwarding**: Built-in DNS resolution validation
-
-### VM Lifecycle Management
-- **Template-Based**: Creates VMs from qcow2 templates with intelligent cloning
-- **Resource Validation**: Enforces minimum requirements and validates host capacity  
-- **Disk Management**: Automatic filesystem expansion for resized disks (LVM & standard partitions)
-- **Security Hardening**: SSH key regeneration, root login disabled, password auth disabled
 
 ## Quick Start
 
@@ -52,7 +38,6 @@ sudo ./delete_vm_and_cleanup.sh --vm myvm
 ```
 
 ## Ideal For
-
 - **Development Environments**: Consistent, isolated VM setups
 - **Homelab Automation**: Multi-VM deployments with network segmentation  
 - **Cloud Infrastructure**: Scalable VM provisioning on dedicated servers
