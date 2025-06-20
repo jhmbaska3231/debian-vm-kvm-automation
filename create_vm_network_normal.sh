@@ -75,7 +75,7 @@ done
 
 # Validate that a network name was specified
 if [ -z "$NETWORK_NAME" ]; then
-    print_msg error "You must specify a network name using --name"
+    print_msg error "Please specify a network name using --name"
     echo "Usage: sudo $0 --name NETWORK_NAME"
     exit 1
 fi
@@ -204,7 +204,7 @@ done
 
 BRIDGE_IP="$SUBNET.1"
 DHCP_START="$SUBNET.2"
-DHCP_END="$SUBNET.254"
+DHCP_END="$SUBNET.220" # Reserve .221 to .254 for any purpose
 
 print_msg info "Selected subnet: $SUBNET.0/24"
 print_msg info "Bridge IP: $BRIDGE_IP"
@@ -304,7 +304,7 @@ if [ "$dns_working" = true ]; then
     print_msg success "DNS forwarding is working properly"
 else
     print_msg warning "DNS forwarding test failed. The network may still work, but DNS might have issues."
-    print_msg info "You can manually verify DNS later using: dig @$BRIDGE_IP google.com"
+    print_msg info "Please manually verify DNS later using: dig @$BRIDGE_IP google.com"
 fi
 
 # Final summary
