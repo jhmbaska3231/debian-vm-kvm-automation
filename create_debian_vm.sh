@@ -1,20 +1,17 @@
 #!/bin/bash
 # Create KVM VM from QCOW2 template script
 #
-# *important: manually change the TEMPLATE_IMAGE, NETWORK and "--os-variant" flag
-# variables to match
+# *important: manually change the TEMPLATE_IMAGE, NETWORK, "--os-variant" flag, and "renderer: networkd | NetworkManager" variables to match
 #
 # This script automates KVM debian based VM creation from a template:
 # - creates VM from existing qcow2 template (linked clone or full copy)
 # - resizes the disk if requested (outside expansion)
-# - automatically configures machine-id and hostname
 # - handles filesystem expansion for resized disks (inside expansion)
-# - regenerates SSH keys and network identifiers
-# - validates resource requirements to ensure VM stability
+# - configures machine-id, hostname, SSH keys regeneration
 #
 # Usage: make script executable and run:
 # chmod +x create_debian_vm.sh
-# sudo ./create_debian_vm.sh <vm_name> <ram_in_MB> <vcpus> <disk_size_GB> <linked / full>
+# sudo ./create_debian_vm.sh <vm_name> <ram_in_MB> <vcpus> <disk_size_GB> <linked | full>
 # *e.g. sudo ./create_debian_vm.sh my_debian_vm 4096 2 20 linked
 #
 # -------------------------------------------------------------------------------
@@ -25,8 +22,8 @@ trap 'echo "ERROR: Command failed at line $LINENO: $BASH_COMMAND"' ERR
 
 # Define variables that can be customized
 IMAGES_DIR="/var/lib/libvirt/images"
-TEMPLATE_IMAGE="${IMAGES_DIR}/<template>.qcow2" # Change to chosen qcow2 template
-NETWORK="default"  # Change to chosen virtual network name
+TEMPLATE_IMAGE="${IMAGES_DIR}/your-template.qcow2" # Change to chosen qcow2 template
+NETWORK="your-network" # Change to chosen virtual network name
 
 # Resource limits
 MIN_RAM=512        # Minimum RAM in MB
@@ -209,15 +206,6 @@ cat > "$FIRSTBOOT_SCRIPT" << 'EOF'
 #!/bin/bash
 # First boot configuration script for new VM
 
-# Generate a more private MAC address that still follows standards
-generate_private_mac() {
-    # Use locally administered address (bit 1 of first byte set)
-    # This avoids conflicts with real hardware MACs
-    first_byte=$(printf "%02x" $(( (0x02 | (RANDOM & 0xfc)) ))) # Ensures bit 1 set, bit 0 clear
-    rest_bytes=$(openssl rand -hex 5 | sed 's/\(..\)/\1:/g; s/.$//')
-    echo "$first_byte:$rest_bytes"
-}
-
 # Check if all required tools are installed
 required_tools_installed() {
     local missing=""
@@ -229,11 +217,144 @@ required_tools_installed() {
     echo "$missing"
 }
 
-# Exit on critical errors
-set -e
+# LVM expansion function with error handling
+expand_lvm_filesystem() {
+    echo "Starting LVM Filesystem Expansion"
+    
+    # Get root filesystem details
+    ROOT_PART=$(findmnt -n -o SOURCE /)
+    echo "Root partition: $ROOT_PART"
+    
+    if [[ "$ROOT_PART" != *"mapper"* ]]; then
+        echo "Not an LVM setup, using standard partition expansion"
+        return 1
+    fi
+    
+    echo "LVM setup detected, proceeding with LVM expansion..."
+    
+    # Get device details
+    PV_DEV=$(pvdisplay | grep "PV Name" | awk '{print $3}')
+    ROOT_DEV=$(basename "$PV_DEV" | sed 's/[0-9]*$//')  # Strip /dev/ and partition number
+    ROOT_PART_NUM=$(echo "$PV_DEV" | grep -o '[0-9]*$')
+    
+    echo "Root device: $ROOT_DEV"
+    echo "Partition number: $ROOT_PART_NUM"
+    
+    # Step 1: Grow the partition
+    echo "Step 1: Growing partition /dev/${ROOT_DEV}${ROOT_PART_NUM}..."
+    if growpart /dev/$ROOT_DEV $ROOT_PART_NUM 2>/dev/null; then
+        echo "Partition grown successfully"
+    else
+        echo "Partition growth failed or already at maximum size"
+        # Continue to check other steps
+    fi
+    
+    # Step 2: Resize physical volume
+    echo "Step 2: Resizing physical volume /dev/${ROOT_DEV}${ROOT_PART_NUM}..."
+    if pvresize /dev/${ROOT_DEV}${ROOT_PART_NUM} 2>/dev/null; then
+        echo "Physical volume resized successfully"
+    else
+        echo "Physical volume resize failed or already at maximum size"
+        # Continue to check other steps
+    fi
+    
+    # Step 3: Get VG and LV names safely
+    echo "Step 3: Getting volume group and logical volume names..."
+    VG_NAME=$(lvs --noheadings -o vg_name "$ROOT_PART" 2>/dev/null | tr -d ' ')
+    LV_NAME=$(lvs --noheadings -o lv_name "$ROOT_PART" 2>/dev/null | tr -d ' ')
+    
+    if [ -z "$VG_NAME" ] || [ -z "$LV_NAME" ]; then
+        echo "ERROR: Could not determine VG/LV names"
+        echo "VG_NAME: '$VG_NAME', LV_NAME: '$LV_NAME'"
+        return 1
+    fi
+    
+    echo "Volume Group: $VG_NAME"
+    echo "Logical Volume: $LV_NAME"
+    
+    # Step 4: Check current sizes and free space
+    echo "Step 4: Checking current sizes and free space..."
+    CURRENT_LV_SIZE=$(lvs --noheadings --units g -o lv_size "$ROOT_PART" | tr -d ' g')
+    FREE_EXTENTS=$(vgdisplay "$VG_NAME" | grep "Free.*PE" | awk '{print $5}')
+    FREE_SIZE=$(vgdisplay "$VG_NAME" | grep "Free.*Size" | awk '{print $7}')
+    
+    echo "Current LV size: ${CURRENT_LV_SIZE}G"
+    echo "Free extents available: $FREE_EXTENTS"
+    echo "Free space available: $FREE_SIZE"
+    
+    if [ "$FREE_EXTENTS" -gt 0 ]; then
+        echo "Step 5: Extending logical volume..."
+        if lvextend -l +100%FREE /dev/${VG_NAME}/${LV_NAME} 2>/dev/null; then
+            echo "Logical volume extended successfully"
+            
+            # Step 6: Resize filesystem
+            echo "Step 6: Resizing filesystem..."
+            if resize2fs /dev/${VG_NAME}/${LV_NAME} 2>/dev/null; then
+                echo "Filesystem resized successfully"
+                
+                # Step 7: Verify the expansion worked
+                echo "Step 7: Verifying filesystem expansion..."
+                NEW_SIZE=$(df -h / | tail -1 | awk '{print $2}')
+                USED_SIZE=$(df -h / | tail -1 | awk '{print $3}')
+                AVAIL_SIZE=$(df -h / | tail -1 | awk '{print $4}')
+                
+                echo "Filesystem expansion completed successfully!"
+                echo "  New total size: $NEW_SIZE"
+                echo "  Used space: $USED_SIZE" 
+                echo "  Available space: $AVAIL_SIZE"
+                return 0
+            else
+                echo "ERROR: resize2fs failed"
+                return 1
+            fi
+        else
+            echo "ERROR: lvextend failed"
+            echo "This might be because:"
+            echo "  - No free space available"
+            echo "  - LV is already at maximum size"
+            echo "  - Permission issues"
+            return 1
+        fi
+    else
+        echo "No free space available for extension"
+        echo "Logical volume is already using all available space"
+        echo "Current filesystem usage:"
+        df -h /
+        return 0
+    fi
+}
+
+# Standard partition expansion fallback
+expand_standard_filesystem() {
+    echo "Standard Partition Filesystem Expansion"
+    
+    ROOT_PART=$(findmnt -n -o SOURCE /)
+    ROOT_DEV=$(lsblk -no pkname ${ROOT_PART} | head -n1 | sed 's|^/dev/||')
+    ROOT_PART_NUM=$(lsblk -no name ${ROOT_PART} | grep -o '[0-9]*$' || echo "3")
+    
+    echo "Expanding standard partition setup..."
+    echo "Root partition: $ROOT_PART"
+    echo "Root device: /dev/${ROOT_DEV}"
+    echo "Partition number: ${ROOT_PART_NUM}"
+    
+    if growpart /dev/$ROOT_DEV $ROOT_PART_NUM 2>/dev/null; then
+        echo "Partition grown successfully"
+    else
+        echo "Partition growth failed or already at maximum size"
+    fi
+    
+    if resize2fs "$ROOT_PART" 2>/dev/null; then
+        echo "Filesystem resized successfully"
+        NEW_SIZE=$(df -h / | tail -1 | awk '{print $2}')
+        echo "New filesystem size: $NEW_SIZE"
+        return 0
+    else
+        echo "ERROR: resize2fs failed for standard partition"
+        return 1
+    fi
+}
 
 log_file="/var/log/firstboot-config.log"
-trap 'echo "ERROR: Command failed at line $LINENO: $BASH_COMMAND" >> "$log_file"' ERR
 exec > >(tee -a "$log_file") 2>&1
 
 echo "Starting first boot configuration at $(date)"
@@ -260,8 +381,7 @@ systemd-machine-id-setup
 echo "Setting hostname to VM_NAME_PLACEHOLDER..."
 hostnamectl set-hostname VM_NAME_PLACEHOLDER
 
-# Regenerate SSH host keys if SSH is installed
-# Fix: Use non-interactive SSH key regeneration
+# Regenerate SSH host keys non interactively if SSH is installed
 if [ -f "/etc/ssh/sshd_config" ]; then
     echo "Regenerating SSH host keys and applying basic hardening..."
     rm -f /etc/ssh/ssh_host_*
@@ -282,77 +402,48 @@ if [ -f "/etc/ssh/sshd_config" ]; then
 fi
 
 # Expand filesystem if disk was resized
-# RESIZED_PLACEHOLDER will be replaced with true/false
 if [ "RESIZED_PLACEHOLDER" = "true" ]; then
     echo "Disk was resized, expanding filesystem..."
     
-    # Find root filesystem information
-    ROOT_PART=$(findmnt -n -o SOURCE /)
+    # Record filesystem size before expansion
+    BEFORE_SIZE=$(df -h / | tail -1 | awk '{print $2}')
+    echo "Filesystem size before expansion: $BEFORE_SIZE"
     
-    # Check if using LVM
-    if [[ "$ROOT_PART" == *"mapper"* ]]; then
-        # LVM setup (most common in modern Debian)
-        echo "Detected LVM setup with ext4 filesystem"
-        
-        # Get LV path and extract VG/LV names
-        LV_PATH=$(df / | tail -1 | awk '{print $1}')
-        VG_NAME=$(lvs --noheadings -o vg_name "$LV_PATH" | tr -d ' ')
-        LV_NAME=$(lvs --noheadings -o lv_name "$LV_PATH" | tr -d ' ')
-        
-        echo "Found logical volume: VG=$VG_NAME, LV=$LV_NAME"
-        
-        # Grow the partition containing the PV
-	ROOT_DEV=$(lsblk -no pkname ${ROOT_PART} | head -n1)
-	ROOT_PART_NUM=$(echo ${ROOT_PART} | grep -o '[0-9]*$' || echo "1")
-	growpart /dev/$ROOT_DEV $ROOT_PART_NUM || echo "Warning: growpart failed, partition may already be at maximum size" >&2
-        
-        # Resize the PV to use the new space
-        pvresize /dev/${ROOT_DEV}${ROOT_PART_NUM} || echo "Warning: pvresize failed, partition may already be fully resized." >&2
-        
-        # Extend the LV to use all free space
-        lvextend -l +100%FREE /dev/${VG_NAME}/${LV_NAME} || {
-            echo "Error: lvextend failed" >&2
-            exit 1
-        }
-        
-        # Resize the filesystem (assuming ext4, the Debian default)
-        resize2fs "$LV_PATH" || {
-            echo "Error: resize2fs failed" >&2
-            exit 1
-        }
+    # Try LVM expansion first, fallback to standard if not LVM
+    if expand_lvm_filesystem; then
+        echo "LVM filesystem expansion completed successfully"
+    elif expand_standard_filesystem; then
+        echo "Standard filesystem expansion completed successfully"
     else
-        # Standard partition setup (less common but still supported)
-        echo "Detected standard partition setup with ext4 filesystem"
-        ROOT_DEV=$(lsblk -no pkname ${ROOT_PART} | head -n1)
-        ROOT_PART_NUM=$(echo ${ROOT_PART} | grep -o '[0-9]*$' || echo "1")
-        
-        # Grow the partition
-        growpart /dev/$ROOT_DEV $ROOT_PART_NUM || echo "Warning: growpart failed, partition may already be at maximum size" >&2
-        
-        # Resize the filesystem (assuming ext4, the Debian default)
-        resize2fs "$ROOT_PART" || {
-            echo "Error: resize2fs failed" >&2
-            exit 1
-        }
+        echo "WARNING: Filesystem expansion failed"
+        echo "Manual expansion may be required after boot"
+        echo "Current filesystem status:"
+        df -h /
+        echo "LVM status (if applicable):"
+        vgdisplay 2>/dev/null || echo "No LVM detected"
+        lvdisplay 2>/dev/null || echo "No logical volumes detected"
     fi
     
-    echo "Filesystem expansion completed successfully"
+    # Final verification
+    AFTER_SIZE=$(df -h / | tail -1 | awk '{print $2}')
+    echo "Final filesystem verification:"
+    echo "  Before: $BEFORE_SIZE"
+    echo "  After:  $AFTER_SIZE"
+    df -h /
 fi
 
 # Configure network based on detected system
 configure_network() {
-    # Detect primary network interface once
+    echo "Configuring network..."
+    
+    # Detect primary network interface
     PRIMARY_INTERFACE=$(ip -o link show | grep -v "lo" | grep "state UP" | awk -F': ' '{print $2}' | head -n 1)
     if [ -z "$PRIMARY_INTERFACE" ]; then
         PRIMARY_INTERFACE=$(ip -o link show | grep -v "lo" | awk -F': ' '{print $2}' | head -n 1)
     fi
     echo "Detected primary network interface: $PRIMARY_INTERFACE"
     
-    # Generate a random MAC address once
-    NEW_MAC=$(generate_private_mac)
-    echo "Generated new MAC address: $NEW_MAC"
-    
-    # Configure Netplan if available
+    # Configure Netplan if present
     if [ -d "/etc/netplan" ]; then
         echo "Netplan detected, creating network configuration..."
         
@@ -363,18 +454,19 @@ configure_network() {
 # Netplan configuration created by VM provisioning script
 network:
   version: 2
-  renderer: NetworkManager
+  renderer: networkd
   ethernets:
     $PRIMARY_INTERFACE:
       dhcp4: true
-      macaddress: $NEW_MAC
+      dhcp6: false
 NETPLAN
         chmod 600 "/etc/netplan/60-vm-custom.yaml"
         
-        # Apply the configuration if netplan is available
+        # Apply the configuration if netplan is present
         if command -v netplan >/dev/null 2>&1; then
             echo "Applying netplan configuration..."
             netplan apply
+            echo "Network configuration applied successfully"
         else
             echo "Warning: netplan command not found, network changes require reboot" >&2
         fi
@@ -382,26 +474,31 @@ NETPLAN
     
     # Configure legacy network interfaces if present
     if [ -f "/etc/network/interfaces" ]; then
-        echo "Legacy network config detected, updating MAC addresses..."
-        
-        # Look for interfaces that need MAC addresses
-        IFACES=$(grep -B1 "iface" /etc/network/interfaces | grep -v "lo" | awk '{print $2}' | grep -v "^$")
-        if [ -n "$IFACES" ]; then
-            for iface in $IFACES; do
-                # Check if interface section already has hwaddress
-                if grep -A10 "iface $iface" /etc/network/interfaces | grep -q "hwaddress"; then
-                    # Update existing hwaddress
-                    sed -i "/iface $iface/,/^\s*iface\|^$/ s/^\s*hwaddress .*$/    hwaddress $NEW_MAC/" /etc/network/interfaces
-                    echo "Updated MAC for interface $iface"
-                else
-                    # Add hwaddress if not present
-                    sed -i "/iface $iface/a\\    hwaddress $NEW_MAC" /etc/network/interfaces
-                    echo "Added MAC for interface $iface"
-                fi
-            done
-        else
-            echo "No network interfaces found to update in interfaces file"
-        fi
+    	echo "Legacy network config detected, configuring DHCP..."
+    	
+    	# Simple approach: ensure primary interface is configured for DHCP
+    	if ! grep -q "iface $PRIMARY_INTERFACE inet dhcp" /etc/network/interfaces; then
+            echo "auto $PRIMARY_INTERFACE" >> /etc/network/interfaces
+            echo "iface $PRIMARY_INTERFACE inet dhcp" >> /etc/network/interfaces
+            echo "Added $PRIMARY_INTERFACE with DHCP to interfaces file"
+    	else
+            echo "Interface $PRIMARY_INTERFACE already configured"
+    	fi
+    fi
+    
+    # Verify network configuration
+    echo "Verifying network configuration..."
+    for i in {1..30}; do
+    	IP_ADDR=$(ip addr show "$PRIMARY_INTERFACE" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1)
+    	if [ -n "$IP_ADDR" ]; then
+            echo "IP address assigned: $IP_ADDR"
+            break
+    	fi
+    	sleep 2
+    done
+
+    if [ -z "$IP_ADDR" ]; then
+    	echo "No IP address assigned after 60 seconds"
     fi
 }
 
@@ -451,7 +548,7 @@ EOF
 
 # Install packages, copy firstboot script, enable the systemd service
 virt-customize -a "$VM_IMAGE" \
-    --run-command "if ! (dpkg -l cloud-guest-utils lvm2 e2fsprogs | grep -q ^ii); then echo 'Required packages not installed. Would install them, but network is isolated.'; fi" \
+    --run-command "if ! (dpkg -l cloud-guest-utils lvm2 e2fsprogs | grep -q ^ii); then echo 'Required packages (cloud-guest-utils lvm2 e2fsprogs) are not installed.'; fi" \
     --run-command "mkdir -p /usr/local/bin && chmod 0755 /usr/local/bin" \
     --copy-in "$FIRSTBOOT_SCRIPT":/usr/local/bin/ \
     --run-command "mv /usr/local/bin/$(basename $FIRSTBOOT_SCRIPT) /usr/local/bin/vm-firstboot.sh && chmod 0755 /usr/local/bin/vm-firstboot.sh" \
@@ -488,20 +585,20 @@ fi
 echo ""
 echo "VM created, customized successfully and started!"
 echo ""
-echo "VM \"$VM_NAME\" has been created with the following specifications:"
-echo "- RAM: ${RAM}MB"
-echo "- vCPUs: $VCPUS"
-echo "- Disk: ${DISK_SIZE}GB"
-echo "- Network: $NETWORK"
+echo "VM Details:"
+echo "  Name: $VM_NAME"
+echo "  RAM: ${RAM}MB"
+echo "  vCPUs: $VCPUS"
+echo "  Disk: ${DISK_SIZE}GB"
+echo "  Network: $NETWORK"
 echo ""
-echo "The following has been automatically configured:"
-echo "- Hostname set to $VM_HOSTNAME (private hostname for $VM_NAME)"
-echo "- Machine-ID regenerated"
-echo "- SSH host keys regenerated (if SSH is installed)"
-echo "- Network configuration updated with unique identifiers (if applicable)"
+echo "First boot will:"
+echo "  - Set hostname to $VM_HOSTNAME (private hostname for $VM_NAME)"
+echo "  - Set up networking (systemd-networkd)"
+echo "  - Regenerate machine-id and SSH keys"
 if [ "$RESIZED" = true ]; then
-    echo "- Filesystem automatically expanded"
+    echo "  - Expand filesystem to use full ${DISK_SIZE}GB disk"
 fi
 echo ""
-echo "First boot configuration logs will be available inside the VM at:"
+echo "First boot configuration logs will be inside the VM at:"
 echo "  - Main log: /var/log/firstboot-config.log"
