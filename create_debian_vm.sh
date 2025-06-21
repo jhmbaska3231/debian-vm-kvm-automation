@@ -22,8 +22,8 @@ trap 'echo "ERROR: Command failed at line $LINENO: $BASH_COMMAND"' ERR
 
 # Define variables that can be customized
 IMAGES_DIR="/var/lib/libvirt/images"
-TEMPLATE_IMAGE="${IMAGES_DIR}/your-template.qcow2" # Change to chosen qcow2 template
-NETWORK="your-network" # Change to chosen virtual network name
+TEMPLATE_IMAGE="${IMAGES_DIR}/your-template.qcow2"  # Change to chosen qcow2 template
+NETWORK="your-network"  # Change to chosen virtual network name
 
 # Resource limits
 MIN_RAM=512        # Minimum RAM in MB
@@ -246,7 +246,6 @@ expand_lvm_filesystem() {
         echo "Partition grown successfully"
     else
         echo "Partition growth failed or already at maximum size"
-        # Continue to check other steps
     fi
     
     # Step 2: Resize physical volume
@@ -255,7 +254,6 @@ expand_lvm_filesystem() {
         echo "Physical volume resized successfully"
     else
         echo "Physical volume resize failed or already at maximum size"
-        # Continue to check other steps
     fi
     
     # Step 3: Get VG and LV names safely
@@ -265,7 +263,6 @@ expand_lvm_filesystem() {
     
     if [ -z "$VG_NAME" ] || [ -z "$LV_NAME" ]; then
         echo "ERROR: Could not determine VG/LV names"
-        echo "VG_NAME: '$VG_NAME', LV_NAME: '$LV_NAME'"
         return 1
     fi
     
@@ -274,13 +271,7 @@ expand_lvm_filesystem() {
     
     # Step 4: Check current sizes and free space
     echo "Step 4: Checking current sizes and free space..."
-    CURRENT_LV_SIZE=$(lvs --noheadings --units g -o lv_size "$ROOT_PART" | tr -d ' g')
     FREE_EXTENTS=$(vgdisplay "$VG_NAME" | grep "Free.*PE" | awk '{print $5}')
-    FREE_SIZE=$(vgdisplay "$VG_NAME" | grep "Free.*Size" | awk '{print $7}')
-    
-    echo "Current LV size: ${CURRENT_LV_SIZE}G"
-    echo "Free extents available: $FREE_EXTENTS"
-    echo "Free space available: $FREE_SIZE"
     
     if [ "$FREE_EXTENTS" -gt 0 ]; then
         echo "Step 5: Extending logical volume..."
@@ -291,17 +282,6 @@ expand_lvm_filesystem() {
             echo "Step 6: Resizing filesystem..."
             if resize2fs /dev/${VG_NAME}/${LV_NAME} 2>/dev/null; then
                 echo "Filesystem resized successfully"
-                
-                # Step 7: Verify the expansion worked
-                echo "Step 7: Verifying filesystem expansion..."
-                NEW_SIZE=$(df -h / | tail -1 | awk '{print $2}')
-                USED_SIZE=$(df -h / | tail -1 | awk '{print $3}')
-                AVAIL_SIZE=$(df -h / | tail -1 | awk '{print $4}')
-                
-                echo "Filesystem expansion completed successfully!"
-                echo "  New total size: $NEW_SIZE"
-                echo "  Used space: $USED_SIZE" 
-                echo "  Available space: $AVAIL_SIZE"
                 return 0
             else
                 echo "ERROR: resize2fs failed"
@@ -309,17 +289,10 @@ expand_lvm_filesystem() {
             fi
         else
             echo "ERROR: lvextend failed"
-            echo "This might be because:"
-            echo "  - No free space available"
-            echo "  - LV is already at maximum size"
-            echo "  - Permission issues"
             return 1
         fi
     else
         echo "No free space available for extension"
-        echo "Logical volume is already using all available space"
-        echo "Current filesystem usage:"
-        df -h /
         return 0
     fi
 }
@@ -370,6 +343,8 @@ if [ -n "$MISSING_TOOLS" ]; then
     echo "Installing missing tools:$MISSING_TOOLS"
     apt-get update -qq
     apt-get install -y cloud-guest-utils lvm2 e2fsprogs
+else
+    echo "All required tools are already installed"
 fi
 
 # Regenerate machine-id
@@ -381,7 +356,7 @@ systemd-machine-id-setup
 echo "Setting hostname to VM_NAME_PLACEHOLDER..."
 hostnamectl set-hostname VM_NAME_PLACEHOLDER
 
-# Regenerate SSH host keys non interactively if SSH is installed
+# Regenerate SSH host keys if installed and start SSH service
 if [ -f "/etc/ssh/sshd_config" ]; then
     echo "Regenerating SSH host keys and applying basic hardening..."
     rm -f /etc/ssh/ssh_host_*
@@ -398,16 +373,33 @@ if [ -f "/etc/ssh/sshd_config" ]; then
         echo "SSH: Disabled password authentication"
     fi
     
-    systemctl restart ssh 2>/dev/null || echo "Note: SSH service not running or not using systemd"
+    # Find the correct SSH service name and start it
+    SSH_SERVICE=""
+    for service in ssh sshd openssh-server; do
+        if systemctl list-unit-files | grep -q "^${service}\.service"; then
+            SSH_SERVICE="$service"
+            break
+        fi
+    done
+    
+    if [ -n "$SSH_SERVICE" ]; then
+        echo "Starting SSH service: $SSH_SERVICE"
+        systemctl enable "$SSH_SERVICE"
+        systemctl restart "$SSH_SERVICE"
+        
+        if systemctl is-active --quiet "$SSH_SERVICE"; then
+            echo "SSH service started successfully"
+        else
+            echo "ERROR: Failed to start SSH service"
+        fi
+    else
+        echo "ERROR: Could not find SSH service"
+    fi
 fi
 
 # Expand filesystem if disk was resized
 if [ "RESIZED_PLACEHOLDER" = "true" ]; then
     echo "Disk was resized, expanding filesystem..."
-    
-    # Record filesystem size before expansion
-    BEFORE_SIZE=$(df -h / | tail -1 | awk '{print $2}')
-    echo "Filesystem size before expansion: $BEFORE_SIZE"
     
     # Try LVM expansion first, fallback to standard if not LVM
     if expand_lvm_filesystem; then
@@ -416,19 +408,10 @@ if [ "RESIZED_PLACEHOLDER" = "true" ]; then
         echo "Standard filesystem expansion completed successfully"
     else
         echo "WARNING: Filesystem expansion failed"
-        echo "Manual expansion may be required after boot"
-        echo "Current filesystem status:"
-        df -h /
-        echo "LVM status (if applicable):"
-        vgdisplay 2>/dev/null || echo "No LVM detected"
-        lvdisplay 2>/dev/null || echo "No logical volumes detected"
     fi
     
-    # Final verification
-    AFTER_SIZE=$(df -h / | tail -1 | awk '{print $2}')
-    echo "Final filesystem verification:"
-    echo "  Before: $BEFORE_SIZE"
-    echo "  After:  $AFTER_SIZE"
+    # Show final size
+    echo "Final filesystem status:"
     df -h /
 fi
 
@@ -476,7 +459,7 @@ NETPLAN
     if [ -f "/etc/network/interfaces" ]; then
     	echo "Legacy network config detected, configuring DHCP..."
     	
-    	# Simple approach: ensure primary interface is configured for DHCP
+    	# Ensure primary interface is configured for DHCP
     	if ! grep -q "iface $PRIMARY_INTERFACE inet dhcp" /etc/network/interfaces; then
             echo "auto $PRIMARY_INTERFACE" >> /etc/network/interfaces
             echo "iface $PRIMARY_INTERFACE inet dhcp" >> /etc/network/interfaces
@@ -487,19 +470,9 @@ NETPLAN
     fi
     
     # Verify network configuration
-    echo "Verifying network configuration..."
-    for i in {1..30}; do
-    	IP_ADDR=$(ip addr show "$PRIMARY_INTERFACE" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1)
-    	if [ -n "$IP_ADDR" ]; then
-            echo "IP address assigned: $IP_ADDR"
-            break
-    	fi
-    	sleep 2
-    done
-
-    if [ -z "$IP_ADDR" ]; then
-    	echo "No IP address assigned after 60 seconds"
-    fi
+    sleep 3
+    IP_ADDR=$(ip addr show "$PRIMARY_INTERFACE" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1)
+    echo "Final IP address: ${IP_ADDR:-'Not assigned'}"
 }
 
 # Call the network configuration function
@@ -546,9 +519,8 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
-# Install packages, copy firstboot script, enable the systemd service
+# Install firstboot script and enable the systemd service
 virt-customize -a "$VM_IMAGE" \
-    --run-command "if ! (dpkg -l cloud-guest-utils lvm2 e2fsprogs | grep -q ^ii); then echo 'Required packages (cloud-guest-utils lvm2 e2fsprogs) are not installed.'; fi" \
     --run-command "mkdir -p /usr/local/bin && chmod 0755 /usr/local/bin" \
     --copy-in "$FIRSTBOOT_SCRIPT":/usr/local/bin/ \
     --run-command "mv /usr/local/bin/$(basename $FIRSTBOOT_SCRIPT) /usr/local/bin/vm-firstboot.sh && chmod 0755 /usr/local/bin/vm-firstboot.sh" \
