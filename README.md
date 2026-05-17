@@ -45,7 +45,7 @@ A production ready set of shell scripts for automated creation, configuration, a
 
 first edit these variables inside create_debian_vm.sh to match your environment
 
-| Variable | Description |
+| variable | description |
 |---|---|
 | TEMPLATE_IMAGE | path to base qcow2 template |
 | NETWORK | match network name created in step 1 |
