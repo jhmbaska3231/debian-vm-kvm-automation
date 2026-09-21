@@ -1,8 +1,8 @@
-# KVM/QEMU Debian VM Toolkit
+# kvm/qemu debian vm toolkit
 
-A production ready set of shell scripts for automated creation, configuration, and management of debian virtual machines on kvm/qemu hosts with network isolation
+a production ready set of shell scripts for automated creation, configuration, and management of debian virtual machines on kvm/qemu hosts with network isolation
 
-## Features
+## features
 
 - **automated network creation**: dynamically finds available bridges and assigns unique subnets
 - **smart vm provisioning**: template based creation with linked clones or full copies, and automatic disk expansion
@@ -14,16 +14,16 @@ A production ready set of shell scripts for automated creation, configuration, a
 
 ---
 
-## Prerequisites
+## prerequisites
 
-### Host requirements
+### host requirements
 
 - a debian based linux host with these installed:
   ```bash
   sudo apt install qemu-kvm qemu-utils libvirt-clients libvirt-daemon-system libguestfs-tools virtinst ufw dnsutils
   ```
 
-### Base qcow2 template
+### base qcow2 template
 
 - a pre built debian qcow2 image with these installed (firstboot script can also install them but requires internet access):
   ```bash
@@ -32,7 +32,7 @@ A production ready set of shell scripts for automated creation, configuration, a
 
 > note password auth and root login are disabled on first boot so template should already have ssh pub key in ~/.ssh/authorized_keys
 
-### Mullvad or other vpn (optional)
+### mullvad or other vpn (optional)
 
 - configure_host_ufw_normal.sh detects mullvad's tunnel interface automatically and adds a vpn routing rule if found, else it configures direct internet access only
 - dns forwarding for vm is handled by libvirt's dnsmasq
@@ -41,7 +41,7 @@ A production ready set of shell scripts for automated creation, configuration, a
 
 ---
 
-## Script configuration
+## script configuration
 
 first edit these variables inside create_debian_vm.sh to match your environment
 
@@ -50,11 +50,11 @@ first edit these variables inside create_debian_vm.sh to match your environment
 | TEMPLATE_IMAGE | path to base qcow2 template |
 | NETWORK | match network name created in step 1 |
 | --os-variant | adjust to distro/version |
-| renderer (in netplan config) | NetworkManager or networkd |
+| renderer (in netplan config) | networkmanager or networkd |
 
 ---
 
-## Usage workflow
+## usage workflow
 
 ```bash
 # 1. create an isolated virtual network
@@ -74,7 +74,7 @@ sudo ./delete_vm_and_cleanup.sh --vm yourvm
 
 ---
 
-## Ideal for
+## ideal for
 
 - **development environments**: consistent, isolated vm setups
 - **homelab automation**: multi vm deployments with network segmentation
